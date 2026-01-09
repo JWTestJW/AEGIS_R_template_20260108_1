@@ -30,11 +30,8 @@ jobs:
     # Self-Hosted ランナーを指定（ラベルは環境に合わせて調整してください）
     runs-on: [self-hosted, linux]
 
-    # テンプレートリポジトリ（名前に 'template' を含む）では実行しない
-    # かつ、手動実行 または PRがマージされた場合のみ実行
-    if: >-
-      !contains(github.event.repository.name , 'template') &&
-      (github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true)
+    # 手動実行 または PRがマージされた場合のみ実行
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
 
     env:
       MOUNT_TARGET_DIR: ${{ secrets.MOUNT_TARGET_DIR }}
