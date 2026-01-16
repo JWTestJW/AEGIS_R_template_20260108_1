@@ -6,7 +6,7 @@ on:
 
 jobs:
   check-renv-lock:
-    name: Check renv.lock Structure and URLs
+    name: check-renv-lock
     runs-on: ubuntu-latest
 
     steps:

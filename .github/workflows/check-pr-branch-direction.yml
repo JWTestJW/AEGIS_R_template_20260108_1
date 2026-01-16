@@ -6,6 +6,7 @@ on:
 
 jobs:
   check-pr-direction:
+    name: check-pr-direction
     runs-on: ubuntu-latest
 
     steps:

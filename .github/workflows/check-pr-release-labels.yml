@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   check-release-label:
-    name: Check Release Labels
+    name: check-release-label
     # qa から main へのマージ時のみ実行
     if: >-
       github.event.pull_request.head.ref == 'qa' &&
