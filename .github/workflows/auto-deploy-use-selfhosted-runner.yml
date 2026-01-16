@@ -28,7 +28,8 @@ on:
   workflow_dispatch: {}
   push:
     tags:
-      - "v*"
+      - "v*" # vで始まるすべてのタグを含める
+      - "!v0.0.0" # v0.0.0 を除外（ワークフロー自体をトリガーさせない）
 
 jobs:
   deploy:
@@ -39,35 +40,15 @@ jobs:
       MOUNT_TARGET_DIR: ${{ secrets.MOUNT_TARGET_DIR }}
 
     steps:
-      - name: Validate Tag
+      - name: Log Tag Information
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
-          # 手動実行（workflow_dispatch）の場合は検証をスキップ
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "Manual trigger detected. Skipping tag validation."
-            exit 0
-          fi
-
+          # GITHUB_REF はワークフローをトリガーしたイベントの参照（例: refs/tags/v1.0.0）
+          # ここではトリガーとなったタグ名を取得しています
           TAG_NAME=${GITHUB_REF#refs/tags/}
           echo "Processing Tag: $TAG_NAME"
 
-          # 例外1: v0.0.0 はスキップ
-          if [ "$TAG_NAME" == "v0.0.0" ]; then
-            echo "Tag is v0.0.0. Skipping deployment."
-            echo "SKIP_DEPLOY=true" >> $GITHUB_ENV
-            exit 0
-          fi
-
-          # 例外2: vX.Y.Z 形式チェック
-          # 正規表現: ^v + 数字 + . + 数字 + . + 数字 $
-          if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Error: Invalid tag format '$TAG_NAME'. Expected format vX.Y.Z (e.g., v1.0.0)."
-            exit 1
-          fi
-
-          echo "Tag format is valid. Proceeding with deployment."
-
       - name: Checkout repository
-        if: env.SKIP_DEPLOY != 'true'
         uses: actions/checkout@v4
         with:
           # Tagトリガーの場合、デフォルトでそのTagがチェックアウトされるため ref 指定は不要
@@ -76,8 +57,8 @@ jobs:
       - name: Prepare and Copy to Mount Point
         env:
           TZ: "Asia/Tokyo" # タイムゾーンを東京に設定
-        # スキップフラグが立っておらず、かつマウント先が設定されている場合のみ実行
-        if: env.SKIP_DEPLOY != 'true' && env.MOUNT_TARGET_DIR != ''
+        # マウント先が設定されている場合のみ実行
+        if: env.MOUNT_TARGET_DIR != ''
         run: |
           # 日時付きディレクトリ名の生成 (例: Deploy_20251223153000123)
           TIMESTAMP=$(date +'%Y%m%d%H%M%S%3N')
@@ -179,6 +160,6 @@ jobs:
           rm "$LOG_FILE"
 
       - name: Warning if secrets are missing
-        if: success() && env.MOUNT_TARGET_DIR == '' && env.SKIP_DEPLOY != 'true'
+        if: success() && env.MOUNT_TARGET_DIR == ''
         run: |
           echo "::warning::Skipped deployment because required secret is missing (MOUNT_TARGET_DIR)."

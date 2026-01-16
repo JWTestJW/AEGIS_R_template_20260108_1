@@ -59,6 +59,7 @@ jobs:
           print(f'Bump type detected: {bump_type}')
 
           # 最新のタグを取得
+          # git describe --tags --abbrev=0: 現在のコミットから履歴を遡り、到達可能な最も近いタグを取得します
           try:
               latest_tag = subprocess.check_output(['git', 'describe', '--tags', '--abbrev=0'], stderr=subprocess.DEVNULL).decode().strip()
           except:
