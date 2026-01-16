@@ -2,7 +2,14 @@
 #  機能概要
 # -----------------------------------------------
 #  このワークフローは、Self-Hosted ランナーを使用し、
-#  指定されたマウントポイントへリポジトリの資材をデプロイします。
+#  新しいTagが作成された際に、リポジトリの資材をデプロイします。
+#
+#  実行条件：
+#  1. v* で始まるTagがプッシュされた場合
+#     - 例外：v0.0.0 は除外（デプロイをスキップ）
+#     - 例外：vX.Y.Z の形式（セマンティックバージョニング）に準拠していない場合はエラー
+#  2. 手動実行（workflow_dispatch）
+#     - タグ検証処理はスキップされ、選択されたブランチ/タグがそのままデプロイされます
 #
 #  主な機能：
 #  - 東京時間の日時（ミリ秒まで）を含むフォルダを作成（例: Deploy_20251223123000123）
@@ -19,34 +26,58 @@ permissions:
 
 on:
   workflow_dispatch: {}
-  pull_request:
-    branches:
-      - main
-    types:
-      - closed
+  push:
+    tags:
+      - "v*"
 
 jobs:
   deploy:
     # Self-Hosted ランナーを指定（ラベルは環境に合わせて調整してください）
     runs-on: [self-hosted, linux]
 
-    # 手動実行 または PRがマージされた場合のみ実行
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
-
     env:
       MOUNT_TARGET_DIR: ${{ secrets.MOUNT_TARGET_DIR }}
 
     steps:
-      - name: Checkout repository (main)
+      - name: Validate Tag
+        run: |
+          # 手動実行（workflow_dispatch）の場合は検証をスキップ
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "Manual trigger detected. Skipping tag validation."
+            exit 0
+          fi
+
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          echo "Processing Tag: $TAG_NAME"
+
+          # 例外1: v0.0.0 はスキップ
+          if [ "$TAG_NAME" == "v0.0.0" ]; then
+            echo "Tag is v0.0.0. Skipping deployment."
+            echo "SKIP_DEPLOY=true" >> $GITHUB_ENV
+            exit 0
+          fi
+
+          # 例外2: vX.Y.Z 形式チェック
+          # 正規表現: ^v + 数字 + . + 数字 + . + 数字 $
+          if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: Invalid tag format '$TAG_NAME'. Expected format vX.Y.Z (e.g., v1.0.0)."
+            exit 1
+          fi
+
+          echo "Tag format is valid. Proceeding with deployment."
+
+      - name: Checkout repository
+        if: env.SKIP_DEPLOY != 'true'
         uses: actions/checkout@v4
         with:
-          ref: main
+          # Tagトリガーの場合、デフォルトでそのTagがチェックアウトされるため ref 指定は不要
           path: checkoutDir
 
       - name: Prepare and Copy to Mount Point
         env:
           TZ: "Asia/Tokyo" # タイムゾーンを東京に設定
-        if: env.MOUNT_TARGET_DIR != ''
+        # スキップフラグが立っておらず、かつマウント先が設定されている場合のみ実行
+        if: env.SKIP_DEPLOY != 'true' && env.MOUNT_TARGET_DIR != ''
         run: |
           # 日時付きディレクトリ名の生成 (例: Deploy_20251223153000123)
           TIMESTAMP=$(date +'%Y%m%d%H%M%S%3N')
@@ -148,6 +179,6 @@ jobs:
           rm "$LOG_FILE"
 
       - name: Warning if secrets are missing
-        if: success() && env.MOUNT_TARGET_DIR == ''
+        if: success() && env.MOUNT_TARGET_DIR == '' && env.SKIP_DEPLOY != 'true'
         run: |
           echo "::warning::Skipped deployment because required secret is missing (MOUNT_TARGET_DIR)."

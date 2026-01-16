@@ -1,11 +1,11 @@
-name: Validate PR Branch Direction
+name: Check PR Branch Direction
 
 on:
   pull_request:
     types: [opened, reopened, synchronize, edited]
 
 jobs:
-  validate-pr:
+  check-pr-direction:
     runs-on: ubuntu-latest
 
     steps:

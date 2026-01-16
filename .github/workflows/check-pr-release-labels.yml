@@ -10,8 +10,8 @@ permissions:
   pull-requests: read
 
 jobs:
-  validate-release-label:
-    name: Validate Release Labels
+  check-release-label:
+    name: Check Release Labels
     # qa から main へのマージ時のみ実行
     if: >-
       github.event.pull_request.head.ref == 'qa' &&
