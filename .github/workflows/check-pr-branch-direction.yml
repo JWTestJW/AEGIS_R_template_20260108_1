@@ -18,16 +18,16 @@ jobs:
           echo "マージ元ブランチ（head）: $HEAD"
 
           # ✅ 許可されている PR の方向
-          if [[ "$HEAD" == "dev" && "$BASE" == "main" ]]; then
-            echo "✅ 許可された PR: dev → main"
-            exit 0
-          fi
-
           if [[ "$HEAD" == "dev" && "$BASE" == "qa" ]]; then
             echo "✅ 許可された PR: dev → qa"
             exit 0
           fi
 
+          if [[ "$HEAD" == "qa" && "$BASE" == "main" ]]; then
+            echo "✅ 許可された PR: qa → main"
+            exit 0
+          fi
+
           # ❌ 許可されていない PR の方向（エラー表示）
-          echo "::error::無効な PR の方向です: ${HEAD} → ${BASE}。許可されているのは dev → main または dev → qa のみです。"
+          echo "::error::無効な PR の方向です: ${HEAD} → ${BASE}。許可されているのは dev → qa または qa → main のみです。"
           exit 1
