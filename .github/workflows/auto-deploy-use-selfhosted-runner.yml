@@ -31,8 +31,6 @@ on:
     workflows: ["Auto Tag Processing"]
     types:
       - completed
-    branches:
-      - main
 
 jobs:
   deploy:
