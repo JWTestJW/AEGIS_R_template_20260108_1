@@ -7,7 +7,9 @@
 #  実行条件：
 #  1. 自動実行（Auto Tag Processing 完了時）
 #     - "Auto Tag Processing" ワークフローが成功した場合にトリガーされます。
-#     - リポジトリの最新のタグ（git describe --tags）を自動的に取得し、そのバージョンの資材をデプロイします。
+#     - トリガーとなったコミットにタグが付与されているかを確認します（git tag --points-at）。
+#       タグが存在する場合のみ、そのタグ（バージョン）の資材をデプロイします。
+#       タグが存在しない場合（例：ラベル不一致によりタグ作成がスキップされた場合）はデプロイを行いません。
 #  2. 手動実行（workflow_dispatch）
 #     - ユーザーが選択したブランチまたはタグの資材をデプロイします。
 #     - タグの自動取得ロジックはスキップされます。
@@ -52,28 +54,47 @@ jobs:
       - name: Log and Checkout Latest Tag
         working-directory: checkoutDir
         run: |
+          DO_DEPLOY="true"
+
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "Manual trigger detected. Using the selected ref: $GITHUB_REF"
             # 手動トリガーの場合は actions/checkout が既に選択されたブランチ/タグをチェックアウトしている
           else
             # workflow_run トリガーの場合、mainブランチがチェックアウトされているため、
-            # 最新のタグを探してチェックアウトし直す
+            # 対象のタグを探してチェックアウトし直す
             echo "Workflow triggered by auto-tag-processing completion."
             
-            # 最新のタグを取得 (current commitから到達可能なもの)
-            LATEST_TAG=$(git describe --tags --abbrev=0)
-            echo "Detected latest tag: $LATEST_TAG"
+            # 1. トリガーとなったコミットSHAを取得 (Auto Tag Processing実行時のHEAD)
+            TRIGGER_COMMIT="${{ github.event.workflow_run.head_sha }}"
             
-            echo "Checking out tag: $LATEST_TAG"
-            git checkout $LATEST_TAG
-            echo "Processing Tag: $LATEST_TAG"
+            # 2. このコミットを指すタグがあるか確認 (points-at)
+            # 注意：1つのコミットに複数のタグがある可能性もありますが、デプロイにはそのうちの1つを使用します
+            TAGS_ON_COMMIT=$(git tag --points-at "$TRIGGER_COMMIT")
+
+            if [ -z "$TAGS_ON_COMMIT" ]; then
+                # タグが見つからない場合（タグ作成がスキップされた場合など）
+                echo "::notice::Skipping deployment. No tags found pointing to commit $TRIGGER_COMMIT."
+                DO_DEPLOY="false"
+            else
+                # タグが見つかった場合
+                # 複数タグがある場合は最初のものを採用
+                LATEST_TAG=$(echo "$TAGS_ON_COMMIT" | head -n 1)
+                
+                echo "Found tag(s) on commit: $TAGS_ON_COMMIT"
+                echo "Deploying target tag: $LATEST_TAG"
+
+                git checkout $LATEST_TAG
+                DO_DEPLOY="true"
+            fi
           fi
+
+          echo "DO_DEPLOY=$DO_DEPLOY" >> $GITHUB_ENV
 
       - name: Prepare and Copy to Mount Point
         env:
           TZ: "Asia/Tokyo" # タイムゾーンを東京に設定
-        # マウント先が設定されている場合のみ実行
-        if: env.MOUNT_TARGET_DIR != ''
+        # マウント先が設定されている場合 かつ デプロイ有効時に実行
+        if: env.MOUNT_TARGET_DIR != '' && env.DO_DEPLOY == 'true'
         run: |
           # 日時付きディレクトリ名の生成 (例: Deploy_20251223153000123)
           TIMESTAMP=$(date +'%Y%m%d%H%M%S%3N')
@@ -175,6 +196,6 @@ jobs:
           rm "$LOG_FILE"
 
       - name: Warning if secrets are missing
-        if: success() && env.MOUNT_TARGET_DIR == ''
+        if: success() && env.MOUNT_TARGET_DIR == '' && env.DO_DEPLOY == 'true'
         run: |
           echo "::warning::Skipped deployment because required secret is missing (MOUNT_TARGET_DIR)."
