@@ -28,10 +28,6 @@ permissions:
 
 on:
   workflow_dispatch: {}
-  workflow_run:
-    workflows: ["Auto Tag Processing"]
-    types:
-      - completed
 
 jobs:
   analyze-repository-name:
@@ -104,8 +100,6 @@ jobs:
 
   deploy:
     needs: analyze-repository-name
-    # workflow_run の場合は成功時のみ実行。手動実行も許可。
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     # Self-Hosted ランナーを指定（ラベルは環境に合わせて調整してください）
     runs-on:
       [
@@ -118,47 +112,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # 最新のTagを取得するために全履歴が必要
+          fetch-depth: 0
           path: checkoutDir
-
-      - name: Log and Checkout Latest Tag
-        working-directory: checkoutDir
-        run: |
-          DO_DEPLOY="true"
-
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "Manual trigger detected. Using the selected ref: $GITHUB_REF"
-            # 手動トリガーの場合は actions/checkout が既に選択されたブランチ/タグをチェックアウトしている
-          else
-            # workflow_run トリガーの場合、mainブランチがチェックアウトされているため、
-            # 対象のタグを探してチェックアウトし直す
-            echo "Workflow triggered by auto-tag-processing completion."
-            
-            # 1. トリガーとなったコミットSHAを取得 (Auto Tag Processing実行時のHEAD)
-            TRIGGER_COMMIT="${{ github.event.workflow_run.head_sha }}"
-            
-            # 2. このコミットを指すタグがあるか確認 (points-at)
-            # 注意：1つのコミットに複数のタグがある可能性もありますが、デプロイにはそのうちの1つを使用します
-            TAGS_ON_COMMIT=$(git tag --points-at "$TRIGGER_COMMIT")
-
-            if [ -z "$TAGS_ON_COMMIT" ]; then
-                # タグが見つからない場合（タグ作成がスキップされた場合など）
-                echo "::notice::Skipping deployment. No tags found pointing to commit $TRIGGER_COMMIT."
-                DO_DEPLOY="false"
-            else
-                # タグが見つかった場合
-                # 複数タグがある場合は最初のものを採用
-                LATEST_TAG=$(echo "$TAGS_ON_COMMIT" | head -n 1)
-                
-                echo "Found tag(s) on commit: $TAGS_ON_COMMIT"
-                echo "Deploying target tag: $LATEST_TAG"
-
-                git checkout $LATEST_TAG
-                DO_DEPLOY="true"
-            fi
-          fi
-
-          echo "DO_DEPLOY=$DO_DEPLOY" >> $GITHUB_ENV
+          ref: ${{ github.ref }}
 
       - name: Prepare and Copy to Delivery Directory
         env:
@@ -168,7 +124,6 @@ jobs:
           MOLECULE_NO: ${{ needs.analyze-repository-name.outputs.molecule_no }}
           STUDY_NO: ${{ needs.analyze-repository-name.outputs.study_no }}
           REPORTING_EVENT: ${{ needs.analyze-repository-name.outputs.reporting_event }}
-        if: env.DO_DEPLOY == 'true'
         run: |
           set -e
           LOG_FILE="deploy_report.log"
@@ -187,11 +142,23 @@ jobs:
             exit 1
           fi
 
+          # DEST_TEMPLATEが空かどうかをチェック
+          if [ -z "$DEST_TEMPLATE" ]; then
+            echo "Error: 配信先テンプレート(DELIVERY_DEST_S/M)が未設定です。" | tee -a "$LOG_FILE"
+            exit 1
+          fi
+
           # 2. テンプレート変数を置換
           DEST_PATH="$DEST_TEMPLATE"
           DEST_PATH="${DEST_PATH//<MoleculeNo>/$MOLECULE_NO}"
           DEST_PATH="${DEST_PATH//<StudyNo>/$STUDY_NO}"
           DEST_PATH="${DEST_PATH//<ReportingEventName>/$REPORTING_EVENT}"
+
+          # DEST_PATHが存在するかどうかをチェック
+          if [ ! -d "$DEST_PATH" ]; then
+            echo "Error: 配信先ディレクトリが存在しません: $DEST_PATH" | tee -a "$LOG_FILE"
+            exit 1
+          fi
 
           echo "Target: $DEST_PATH" >> "$LOG_FILE"
           echo "========================================" >> "$LOG_FILE"
