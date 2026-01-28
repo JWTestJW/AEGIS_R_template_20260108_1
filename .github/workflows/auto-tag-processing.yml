@@ -11,22 +11,18 @@ permissions:
 jobs:
   check-template:
     runs-on: ubuntu-latest
-    outputs:
-      is_template: ${{ steps.check.outputs.is_template }}
     steps:
       - name: Check if repository is a template
-        id: check
         run: |
           repo_name="${GITHUB_REPOSITORY##*/}"
           if echo "$repo_name" | grep -i "template" ; then
-            echo "is_template=true" >> $GITHUB_OUTPUT
-          else
-            echo "is_template=false" >> $GITHUB_OUTPUT
+            echo "Repository name contains 'template', cancelling workflow."
+            # 78で終了することでワークフローを「キャンセル」状態にし、後続のワークフロー（workflow_runトリガー）は実行されません（エラーではありません）。
+            exit 78
           fi
 
   tag-processing:
     needs: check-template
-    if: needs.check-template.outputs.is_template == 'false'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -86,7 +82,8 @@ jobs:
           # 一致するラベルがない場合は終了
           if not bump_type:
               print('No release label found (release:major, release:minor, release:patch). Exiting.')
-              sys.exit(0)
+              # 78で終了することでワークフローを「キャンセル」状態にし、後続のワークフロー（workflow_runトリガー）は実行されません（エラーではありません）。
+              sys.exit(78)
 
           print(f'Bump type detected: {bump_type}')
 
