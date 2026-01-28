@@ -1,25 +1,24 @@
 # ================================================
-#  機能概要
+# 機能概要
 # -----------------------------------------------
-#  このワークフローは、Self-Hosted ランナーを使用し、
-#  新しいTagが作成された際に、リポジトリの資材をデプロイします。
+# このワークフローはSelf-Hostedランナー上で、
+# リポジトリ名から環境情報を解析し、タグ作成時または手動実行時に
+# 資材を指定パスへデプロイします。
 #
-#  実行条件：
-#  1. 自動実行（Auto Tag Processing 完了時）
-#     - "Auto Tag Processing" ワークフローが成功した場合にトリガーされます。
-#     - トリガーとなったコミットにタグが付与されているかを確認します（git tag --points-at）。
-#       タグが存在する場合のみ、そのタグ（バージョン）の資材をデプロイします。
-#       タグが存在しない場合（例：ラベル不一致によりタグ作成がスキップされた場合）はデプロイを行いません。
-#  2. 手動実行（workflow_dispatch）
-#     - ユーザーが選択したブランチまたはタグの資材をデプロイします。
-#     - タグの自動取得ロジックはスキップされます。
+# 実行条件：
+# ・"Auto Tag Processing"ワークフロー成功時（自動実行）
+# 　- 対象コミットにタグが付与されている場合のみデプロイ
+# ・workflow_dispatch（手動実行）
+# 　- 選択したブランチまたはタグの資材をデプロイ
 #
-#  主な機能：
-#  - 東京時間の日時（ミリ秒まで）を含むフォルダを作成（例: Deploy_20251223123000123）
-#  - 必要なソースコードやファイルのコピー
-#  - rsync を使用してローカルモードでマウントポイントへ
-#  - デプロイ完了後、checkoutDir を削除してクリーンアップ
-#  - secrets.MOUNT_TARGET_DIR が設定されていない場合はデプロイをスキップし、警告を表示
+# 主な処理：
+# ・リポジトリ名からデプロイ先情報を抽出
+# ・テンプレートパスを変数で置換し配信先決定
+# 下記ファイルが配信対象：
+#  renv.lock
+#  .Rファイル（renv配下除く）（Scriptsフォルダへ）
+# ・エラー時は即時中断、全処理ログはActionsで確認可能
+# ・最後にcheckout資材とログをクリーンアップ
 # ================================================
 
 name: Auto Deploy (Self-Hosted)
@@ -35,14 +34,85 @@ on:
       - completed
 
 jobs:
+  analyze-repository-name:
+    runs-on: ubuntu-latest
+    outputs:
+      repo_type: ${{ steps.parse-name.outputs.repo_type }}
+      molecule_no: ${{ steps.parse-name.outputs.molecule_no }}
+      study_no: ${{ steps.parse-name.outputs.study_no }}
+      reporting_event: ${{ steps.parse-name.outputs.reporting_event }}
+      env_name: ${{ steps.parse-name.outputs.env_name }}
+    steps:
+      - name: Parse Repository Name
+        id: parse-name
+        run: |
+          # Get pure repository name (remove owner/)
+          REPO_NAME=$(echo "${{ github.repository }}" | awk -F '/' '{print $2}')
+          echo "Analyzing Repository Name: $REPO_NAME"
+
+          IFS='-' read -r -a parts <<< "$REPO_NAME"
+          PARTS_LEN=${#parts[@]}
+
+          # 3rd part (index 2) determines type S or M
+          # Example S: AEGIS-PRD-S-RO1234567-STD0001-ReportingEvent1-dev
+          # Example M: AEGIS-ZTEST-M-RO1234567-ReportingEvent2-dev
+
+          if [ "$PARTS_LEN" -lt 3 ]; then
+            echo "Error: Repository name must have at least 3 parts, got $PARTS_LEN."
+            exit 1
+          fi
+
+          TYPE="${parts[2]}"
+
+          if [ "$TYPE" == "S" ]; then
+            if [ "$PARTS_LEN" -lt 7 ]; then
+              echo "Error: Type S repository name must have at least 7 parts, got $PARTS_LEN."
+              exit 1
+            fi
+            echo "Detected Type: S (Study)"
+            MOLECULE_NO="${parts[3]}"
+            STUDY_NO="${parts[4]}"
+            EVENT_NAME="${parts[5]}"
+            ENV_NAME="${parts[6]}"
+
+            echo "repo_type=S" >> $GITHUB_OUTPUT            
+            echo "molecule_no=$MOLECULE_NO" >> $GITHUB_OUTPUT
+            echo "study_no=$STUDY_NO" >> $GITHUB_OUTPUT
+            echo "reporting_event=$EVENT_NAME" >> $GITHUB_OUTPUT
+            echo "env_name=$ENV_NAME" >> $GITHUB_OUTPUT
+
+          elif [ "$TYPE" == "M" ]; then
+            if [ "$PARTS_LEN" -lt 6 ]; then
+              echo "Error: Type M repository name must have at least 6 parts, got $PARTS_LEN."
+              exit 1
+            fi
+            echo "Detected Type: M (Molecule)"
+            MOLECULE_NO="${parts[3]}"
+            EVENT_NAME="${parts[4]}"
+            ENV_NAME="${parts[5]}"
+
+            echo "repo_type=M" >> $GITHUB_OUTPUT            
+            echo "molecule_no=$MOLECULE_NO" >> $GITHUB_OUTPUT
+            echo "study_no=" >> $GITHUB_OUTPUT
+            echo "reporting_event=$EVENT_NAME" >> $GITHUB_OUTPUT
+            echo "env_name=$ENV_NAME" >> $GITHUB_OUTPUT
+
+          else
+            echo "Error: Unknown repository name pattern. Type '$TYPE' is not S or M."
+            exit 1
+          fi
+
   deploy:
+    needs: analyze-repository-name
     # workflow_run の場合は成功時のみ実行。手動実行も許可。
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     # Self-Hosted ランナーを指定（ラベルは環境に合わせて調整してください）
-    runs-on: [self-hosted, linux]
-
-    env:
-      MOUNT_TARGET_DIR: ${{ secrets.MOUNT_TARGET_DIR }}
+    runs-on:
+      [
+        self-hosted,
+        linux,
+        "${{ needs.analyze-repository-name.outputs.env_name }}"
+      ]
 
     steps:
       - name: Checkout repository
@@ -90,112 +160,78 @@ jobs:
 
           echo "DO_DEPLOY=$DO_DEPLOY" >> $GITHUB_ENV
 
-      - name: Prepare and Copy to Mount Point
+      - name: Prepare and Copy to Delivery Directory
         env:
-          TZ: "Asia/Tokyo" # タイムゾーンを東京に設定
-        # マウント先が設定されている場合 かつ デプロイ有効時に実行
-        if: env.MOUNT_TARGET_DIR != '' && env.DO_DEPLOY == 'true'
+          DELIVERY_DEST_S: ${{ vars.DELIVERY_DEST_S }}
+          DELIVERY_DEST_M: ${{ vars.DELIVERY_DEST_M }}
+          REPO_TYPE: ${{ needs.analyze-repository-name.outputs.repo_type }}
+          MOLECULE_NO: ${{ needs.analyze-repository-name.outputs.molecule_no }}
+          STUDY_NO: ${{ needs.analyze-repository-name.outputs.study_no }}
+          REPORTING_EVENT: ${{ needs.analyze-repository-name.outputs.reporting_event }}
+        if: env.DO_DEPLOY == 'true'
         run: |
-          # 日時付きディレクトリ名の生成 (例: Deploy_20251223153000123)
-          TIMESTAMP=$(date +'%Y%m%d%H%M%S%3N')
-          DEPLOY_DIR="Deploy_$TIMESTAMP"
-
-          echo "Creating deployment directory: $DEPLOY_DIR"
-          mkdir -p "$DEPLOY_DIR"
-
-          # src フォルダのコピー（存在する場合のみ）
-          if [ -d "checkoutDir/src" ]; then
-            echo "Copying src..."
-            cp -r "checkoutDir/src" "$DEPLOY_DIR/"
-          else
-            echo "Info: src folder not found in checkoutDir, skipping."
-          fi
-
-          # test.R ファイルのコピー（存在する場合のみ）
-          if [ -f "checkoutDir/test.R" ]; then
-            echo "Copying test.R..."
-            cp "checkoutDir/test.R" "$DEPLOY_DIR/"
-          else
-            echo "Info: test.R file not found in checkoutDir, skipping."
-          fi
-
-          echo "----------------------------------------"
-          echo "Content of $DEPLOY_DIR:"
-          ls -R "$DEPLOY_DIR"
-          echo "----------------------------------------"
-
-          # マウントポイントの存在確認
-          if [ ! -d "$MOUNT_TARGET_DIR" ]; then
-            echo "Error: Target directory '$MOUNT_TARGET_DIR' does not exist or is not mounted."
-            exit 1
-          fi
-
-          # ログファイル定義
+          set -e
           LOG_FILE="deploy_report.log"
           START_TIME=$(date +'%Y-%m-%d %H:%M:%S')
-
           echo "========================================" > "$LOG_FILE"
           echo "Deployment Report" >> "$LOG_FILE"
           echo "Start Time: $START_TIME" >> "$LOG_FILE"
-          echo "Target: $MOUNT_TARGET_DIR/$DEPLOY_DIR" >> "$LOG_FILE"
+
+          # 1. 配信先パスのテンプレートを選択
+          if [ "$REPO_TYPE" = "S" ]; then
+            DEST_TEMPLATE="$DELIVERY_DEST_S"
+          elif [ "$REPO_TYPE" = "M" ]; then
+            DEST_TEMPLATE="$DELIVERY_DEST_M"
+          else
+            echo "Error: Unknown repo_type: $REPO_TYPE" | tee -a "$LOG_FILE"
+            exit 1
+          fi
+
+          # 2. テンプレート変数を置換
+          DEST_PATH="$DEST_TEMPLATE"
+          DEST_PATH="${DEST_PATH//<MoleculeNo>/$MOLECULE_NO}"
+          DEST_PATH="${DEST_PATH//<StudyNo>/$STUDY_NO}"
+          DEST_PATH="${DEST_PATH//<ReportingEventName>/$REPORTING_EVENT}"
+
+          echo "Target: $DEST_PATH" >> "$LOG_FILE"
           echo "========================================" >> "$LOG_FILE"
 
-          echo "Starting Local Copy to $MOUNT_TARGET_DIR..."
-
-          # 【検証1】転送元のファイル数をカウント
-          SRC_COUNT=$(find "$DEPLOY_DIR" -type f | wc -l)
-          echo "Source File Count: $SRC_COUNT" >> "$LOG_FILE"
-
-          # rsync をローカルモードで使用してコピー
-          # -a: アーカイブモード（権限維持）
-          # -v: 詳細表示
-          # -c: チェックサムを行う（重要：ファイル内容で比較するため信頼性が高いが時間はかかる）
-          # --stats: 転送結果の統計情報を表示
-          # SSHオプション (-e) は指定しない
-          # ログを追記モードで保存
-          echo "[RSYNC OUTPUT]" >> "$LOG_FILE"
-          rsync -avc --stats "$DEPLOY_DIR" "$MOUNT_TARGET_DIR/" >> "$LOG_FILE" 2>&1
-          RSYNC_EXIT_CODE=$?
-
-          if [ $RSYNC_EXIT_CODE -ne 0 ]; then
-             echo "Error: rsync failed with exit code $RSYNC_EXIT_CODE" | tee -a "$LOG_FILE"
-             exit 1
+          # 3-2. Scriptsフォルダの存在確認と作成
+          SCRIPTS_DIR="$DEST_PATH/Scripts"
+          if [ -d "$SCRIPTS_DIR" ]; then
+            echo "Removing existing Scripts directory: $SCRIPTS_DIR" | tee -a "$LOG_FILE"
+            rm -rf "$SCRIPTS_DIR"
           fi
-            
-          # 【検証2】転送先のファイル数をカウント（再帰的に検索して比較）
-          # rsyncはディレクトリごとコピーしているため、パスを結合して確認
-          DEST_PATH="$MOUNT_TARGET_DIR/$DEPLOY_DIR"
-          DEST_COUNT=$(find "$DEST_PATH" -type f | wc -l)
+          mkdir -p "$SCRIPTS_DIR"
 
-          echo "----------------------------------------" >> "$LOG_FILE"
-          echo "Destination File Count: $DEST_COUNT" >> "$LOG_FILE"
+          # 3-3. checkoutDir配下の全ての.Rファイルを再帰的に検索し、renv配下を除外してScriptsへコピー
+          echo "Copying .R files to Scripts..." | tee -a "$LOG_FILE"
+          find checkoutDir -type f -name "*.R" ! -path "*/renv/*" -exec cp {} "$SCRIPTS_DIR/" \;
+          if [ $? -ne 0 ]; then
+            echo "Error: Failed to copy .R files." | tee -a "$LOG_FILE"
+            exit 1
+          fi
 
-          # 整合性チェック
-          if [ "$SRC_COUNT" -eq "$DEST_COUNT" ]; then
-             echo "Result: SUCCESS (File counts match)" >> "$LOG_FILE"
+          # 3-4. renv.lockをコピー
+          if [ -f "checkoutDir/renv.lock" ]; then
+            cp "checkoutDir/renv.lock" "$DEST_PATH/"
+            if [ $? -ne 0 ]; then
+              echo "Error: Failed to copy renv.lock." | tee -a "$LOG_FILE"
+              exit 1
+            fi
           else
-             echo "Result: FAILURE (Count mismatch! Source: $SRC_COUNT vs Dest: $DEST_COUNT)" >> "$LOG_FILE"
-             # 失敗した場合、コンソールにも出してエラー終了させる
-             cat "$LOG_FILE"
-             exit 1
+            echo "Info: renv.lock not found in checkoutDir." | tee -a "$LOG_FILE"
           fi
 
           END_TIME=$(date +'%Y-%m-%d %H:%M:%S')
           echo "End Time: $END_TIME" >> "$LOG_FILE"
           echo "========================================" >> "$LOG_FILE"
-
-          echo "Deployment completed successfully."
-
-          # ログの内容をコンソールに出力して確認可能にする
+          echo "Deployment completed successfully." | tee -a "$LOG_FILE"
           cat "$LOG_FILE"
 
-          # checkouDirの清掃
+          # checkoutDirのクリーンアップ
           echo "Cleaning up checkoutDir..."
           rm -rf checkoutDir
-          # 必要であればログファイルも削除、あるいはアーティファクトとして残すことも可能
-          rm "$LOG_FILE"
 
-      - name: Warning if secrets are missing
-        if: success() && env.MOUNT_TARGET_DIR == '' && env.DO_DEPLOY == 'true'
-        run: |
-          echo "::warning::Skipped deployment because required secret is missing (MOUNT_TARGET_DIR)."
+          # ログファイルの削除
+          rm "$LOG_FILE"

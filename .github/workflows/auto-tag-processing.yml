@@ -1,8 +1,7 @@
 name: Auto Tag Processing
 
 on:
-  pull_request:
-    types: [closed]
+  push:
     branches:
       - main
 
@@ -11,19 +10,44 @@ permissions:
 
 jobs:
   tag-processing:
-    # PRがmainにマージされた場合にトリガー
-    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
     steps:
+      - name: Skip if repository is a template
+        run: |
+          repo_name="${GITHUB_REPOSITORY##*/}"
+          if echo "$repo_name" | grep -i "template" ; then
+            echo "Repository name contains 'template', skipping workflow."
+            exit 0
+          fi
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0 # git describeを実行するためにすべての履歴を取得
 
+      - name: Set up Python
+        uses: actions/setup-python@v4
+
+      - name: Install GitHub CLIP
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gh
+
+      - name: Get related PR labels
+        id: pr_labels
+        run: |
+          # 最新コミットSHA取得
+          COMMIT_SHA=$(git rev-parse HEAD)
+          # mainの該当PR取得
+          PR_JSON=$(gh pr list --state merged --base main --search $COMMIT_SHA --json number,labels --limit 1)
+          echo "PR_JSON=$PR_JSON" >> $GITHUB_ENV
+          LABELS=$(echo "$PR_JSON" | python3 -c "import sys, json; arr=json.load(sys.stdin); print(json.dumps(arr[0]['labels']) if arr and 'labels' in arr[0] else '[]')")
+          echo "PR_LABELS=$LABELS" >> $GITHUB_ENV
+
       - name: Process Labels and Tag
         env:
-          PR_LABELS: ${{ toJson(github.event.pull_request.labels) }}
+          PR_LABELS: ${{ env.PR_LABELS }}
         run: |
           python3 -c "
           import os
