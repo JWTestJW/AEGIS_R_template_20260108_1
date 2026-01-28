@@ -9,18 +9,26 @@ permissions:
   contents: write # リポジトリにタグをプッシュするために必要
 
 jobs:
-  tag-processing:
+  check-template:
     runs-on: ubuntu-latest
-
+    outputs:
+      is_template: ${{ steps.check.outputs.is_template }}
     steps:
-      - name: Skip if repository is a template
+      - name: Check if repository is a template
+        id: check
         run: |
           repo_name="${GITHUB_REPOSITORY##*/}"
           if echo "$repo_name" | grep -i "template" ; then
-            echo "Repository name contains 'template', skipping workflow."
-            exit 0
+            echo "is_template=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_template=false" >> $GITHUB_OUTPUT
           fi
 
+  tag-processing:
+    needs: check-template
+    if: needs.check-template.outputs.is_template == 'false'
+    runs-on: ubuntu-latest
+    steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
