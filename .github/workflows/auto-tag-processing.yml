@@ -130,8 +130,9 @@ jobs:
             });
             core.setOutput('new_tag', newTag);
 
-      - name: Trigger Auto Deploy Workflow
-        if: ${{ steps.process-labels-and-tag.outputs.new_tag != '' }}
-        uses: JWTestJW/.github/workflows/auto-deploy-use-selfhosted-runner.yml@main
-        with:
-          tag: ${{ steps.process-labels-and-tag.outputs.new_tag }}
+  deploy:
+    needs: tag-processing
+    if: ${{ needs.tag-processing.outputs.new_tag != '' }}
+    uses: ./.github/workflows/auto-deploy-use-selfhosted-runner.yml
+    with:
+      tag: ${{ needs.tag-processing.outputs.new_tag }}
