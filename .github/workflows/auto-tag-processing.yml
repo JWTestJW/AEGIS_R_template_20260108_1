@@ -21,9 +21,9 @@ jobs:
           if echo "$repo_name" | grep -i "template" ; then
             echo "is_template=true" >> $GITHUB_OUTPUT
             echo "This repository is a template. Exiting."
-            exit 0
           else
             echo "is_template=false" >> $GITHUB_OUTPUT
+            echo "This repository is not a template. Continuing."
           fi
 
   check-repo-ready:
@@ -45,9 +45,10 @@ jobs:
           if [ -z "$TAGS" ] || ! echo "$TAGS" | grep -q "^v0\.0\.0$"; then
             echo "repo_ready=false" >> $GITHUB_OUTPUT
             echo "No v0.0.0 tag found (no tags or v0.0.0 missing). Repository not ready. Exiting."
-            exit 0
+          else
+            echo "repo_ready=true" >> $GITHUB_OUTPUT
+            echo "Repository ready. Continuing."
           fi
-          echo "repo_ready=true" >> $GITHUB_OUTPUT
 
   tag-processing:
     runs-on: ubuntu-latest
