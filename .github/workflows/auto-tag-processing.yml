@@ -9,146 +9,108 @@ permissions:
   contents: write # リポジトリにタグをプッシュするために必要
 
 jobs:
-  check-template:
+  tag-processing:
     runs-on: ubuntu-latest
-    outputs:
-      is_template: ${{ steps.check.outputs.is_template }}
     steps:
       - name: Check if repository is a template
-        id: check
+        id: check_template
         run: |
           repo_name="${GITHUB_REPOSITORY##*/}"
           if echo "$repo_name" | grep -i "template" ; then
-            echo "is_template=true" >> $GITHUB_OUTPUT
-          else
-            echo "is_template=false" >> $GITHUB_OUTPUT
+            echo "This repository is a template. Exiting."
+            exit 0
           fi
 
-  tag-processing:
-    needs: check-template
-    if: needs.check-template.outputs.is_template == 'false'
-    runs-on: ubuntu-latest
-    steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # git describeを実行するためにすべての履歴を取得
+          fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-
-      - name: Install GitHub CLIP
+      - name: Check tags existence
+        id: check_tags
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gh
+          TAGS=$(git tag)
+          if [ -z "$TAGS" ]; then
+            echo "No tags found. Exiting."
+            exit 0
+          fi
+          if [ "$TAGS" = "v0.0.0" ]; then
+            echo "Only v0.0.0 tag found. Exiting."
+            exit 0
+          fi
 
       - name: Get related PR labels
         id: pr_labels
-        run: |
-          # 最新コミットSHA取得
-          COMMIT_SHA=$(git rev-parse HEAD)
-          # mainの該当PR取得
-          PR_JSON=$(gh pr list --state merged --base main --search $COMMIT_SHA --json number,labels --limit 1)
-          echo "PR_JSON=$PR_JSON" >> $GITHUB_ENV
-          LABELS=$(echo "$PR_JSON" | python3 -c "import sys, json; arr=json.load(sys.stdin); print(json.dumps(arr[0]['labels']) if arr and 'labels' in arr[0] else '[]')")
-          echo "PR_LABELS=$LABELS" >> $GITHUB_ENV
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const commitSha = process.env.GITHUB_SHA;
+            // mainブランチにマージされたPRを検索
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "closed",
+              base: "main",
+              sort: "updated",
+              direction: "desc",
+              per_page: 10
+            });
+            // このコミットを含むPRを探す
+            const pr = prs.find(pr => pr.merge_commit_sha === commitSha);
+            if (!pr) {
+              core.info("No related PR found.");
+              core.setOutput("labels", "[]");
+              return;
+            }
+            const labels = pr.labels.map(l => l.name);
+            core.setOutput("labels", JSON.stringify(labels));
 
       - name: Process Labels and Tag
-        env:
-          PR_LABELS: ${{ env.PR_LABELS }}
-        run: |
-          python3 -c "
-          import os
-          import json
-          import subprocess
-          import sys
+        id: process-labels-and-tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = JSON.parse('${{ steps.pr_labels.outputs.labels }}');
+            let bumpType = null;
+            if (labels.includes('release:major')) bumpType = 'major';
+            else if (labels.includes('release:minor')) bumpType = 'minor';
+            else if (labels.includes('release:patch')) bumpType = 'patch';
 
-          # PRラベルを取得
-          labels_json = os.environ.get('PR_LABELS', '[]')
-          try:
-              labels = json.loads(labels_json)
-          except:
-              labels = []
+            if (!bumpType) {
+              core.info('No release label found. Exiting.');
+              return;
+            }
+            core.info(`Bump type detected: ${bumpType}`);
 
-          label_names = [l['name'] for l in labels]
-          bump_type = None
+            // 最新のタグを取得
+            const tags = await github.rest.repos.listTags({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 1
+            });
+            let latestTag = tags.data.length > 0 ? tags.data[0].name : 'v0.0.0';
+            core.info(`Latest tag: ${latestTag}`);
 
-          # ラベルを走査
-          # ロジック: release:major, release:minor, release:patch を確認
-          # 優先順位: major > minor > patch
-          if 'release:major' in label_names:
-              bump_type = 'major'
-          elif 'release:minor' in label_names:
-              bump_type = 'minor'
-          elif 'release:patch' in label_names:
-              bump_type = 'patch'
+            let [major, minor, patch] = latestTag.replace(/^v/, '').split('.').map(x => parseInt(x) || 0);
+            if (bumpType === 'major') { major++; minor = 0; patch = 0; }
+            else if (bumpType === 'minor') { minor++; patch = 0; }
+            else if (bumpType === 'patch') { patch++; }
 
-          # 一致するラベルがない場合は終了
-          if not bump_type:
-              print('No release label found (release:major, release:minor, release:patch). Exiting.')
-              sys.exit(0)
+            const newTag = `v${major}.${minor}.${patch}`;
+            core.info(`New tag: ${newTag}`);
 
-          print(f'Bump type detected: {bump_type}')
-
-          # 最新のタグを取得
-          # git describe --tags --abbrev=0: 現在のコミットから履歴を遡り、到達可能な最も近いタグを取得します
-          try:
-              latest_tag = subprocess.check_output(['git', 'describe', '--tags', '--abbrev=0'], stderr=subprocess.DEVNULL).decode().strip()
-          except:
-              latest_tag = 'v0.0.0'
-
-          print(f'Latest tag: {latest_tag}')
-
-          # バージョン vX.Y.Z を解析
-          if latest_tag.startswith('v'):
-              version_str = latest_tag[1:]
-          else:
-              version_str = latest_tag
-
-          parts = version_str.split('.')
-          # X.Y.Z形式を保証
-          while len(parts) < 3:
-              parts.append('0')
-
-          try:
-              major = int(parts[0])
-              minor = int(parts[1])
-              patch = int(parts[2])
-          except ValueError:
-              print(f'Error: Could not parse version numbers from tag {latest_tag}')
-              sys.exit(1)
-
-          # セマンティック バージョニング (SemVer) ロジックを適用
-          # release:major -> v(X+1).0.0 (下位バージョンは0にリセット)
-          # release:minor -> vX.(Y+1).0 (下位バージョンは0にリセット)
-          # release:patch -> vX.Y.(Z+1)
-          if bump_type == 'major':
-              major += 1
-              minor = 0
-              patch = 0
-          elif bump_type == 'minor':
-              minor += 1
-              patch = 0
-          elif bump_type == 'patch':
-              patch += 1
-
-          new_tag = f'v{major}.{minor}.{patch}'
-          print(f'New tag: {new_tag}')
-
-          # プッシュ用にgitを設定
-          subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)
-          subprocess.run(['git', 'config', 'user.email', 'github-actions[bot]@users.noreply.github.com'], check=True)
-
-          # 新しいタグをプッシュ
-          try:
-              subprocess.run(['git', 'tag', new_tag], check=True)
-              subprocess.run(['git', 'push', 'origin', new_tag], check=True)
-              print(f'Successfully pushed tag {new_tag}')
-          except subprocess.CalledProcessError as e:
-              print(f'Failed to push tag: {e}')
-              sys.exit(1)
+            // 新しいタグを作成
+            const commitSha = process.env.GITHUB_SHA;
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `refs/tags/${newTag}`,
+              sha: commitSha
+            });
+            core.setOutput('new_tag', newTag);
 
       - name: Trigger Auto Deploy Workflow
+        if: ${{ steps.process-labels-and-tag.outputs.new_tag != '' }}
         uses: actions/github-script@v7
         env:
           NEW_TAG: ${{ steps.process-labels-and-tag.outputs.new_tag }}
