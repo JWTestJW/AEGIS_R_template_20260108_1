@@ -42,9 +42,9 @@ jobs:
         id: check_repo_ready
         run: |
           TAGS=$(git tag)
-          if ! echo "$TAGS" | grep -q "^v0\.0\.0$"; then
+          if [ -z "$TAGS" ] || ! echo "$TAGS" | grep -q "^v0\.0\.0$"; then
             echo "repo_ready=false" >> $GITHUB_OUTPUT
-            echo "v0.0.0 tag not found. Repository not ready. Exiting."
+            echo "No v0.0.0 tag found (no tags or v0.0.0 missing). Repository not ready. Exiting."
             exit 0
           fi
           echo "repo_ready=true" >> $GITHUB_OUTPUT
