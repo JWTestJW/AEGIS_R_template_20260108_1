@@ -28,6 +28,11 @@ permissions:
 
 on:
   workflow_dispatch: {}
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
 
 jobs:
   analyze-repository-name:
@@ -109,12 +114,27 @@ jobs:
       ]
 
     steps:
+      - name: Determine ref to checkout
+        id: set-ref
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "REF=${{ inputs.tag }}" >> $GITHUB_ENV
+            echo "Triggered by workflow_call. Using tag: ${{ inputs.tag }}"
+          else
+            echo "REF=${{ github.ref }}" >> $GITHUB_ENV
+            echo "Triggered by workflow_dispatch or default. Using ref: ${{ github.ref }}"
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           path: checkoutDir
-          ref: ${{ github.ref }}
+          ref: ${{ env.REF }}
+
+      - name: Show ref info
+        run: |
+          echo "Checked out ref: $REF"
 
       - name: Prepare and Copy to Delivery Directory
         env:
