@@ -132,6 +132,6 @@ jobs:
 
       - name: Trigger Auto Deploy Workflow
         if: ${{ steps.process-labels-and-tag.outputs.new_tag != '' }}
-        uses: ${{ github.repository }}/.github/workflows/auto-deploy-use-selfhosted-runner.yml@main
+        uses: JWTestJW/.github/workflows/auto-deploy-use-selfhosted-runner.yml@main
         with:
           tag: ${{ steps.process-labels-and-tag.outputs.new_tag }}
