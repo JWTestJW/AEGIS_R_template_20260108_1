@@ -193,14 +193,17 @@ jobs:
 
           # 3-3. checkoutDir配下の全ての.Rファイルを再帰的に検索し、renv配下を除外してScriptsへコピー
           echo "Copying .R files to Scripts..." | tee -a "$LOG_FILE"
+          FILE_COUNT=$(find checkoutDir -type f -name "*.R" ! -path "*/renv/*" | wc -l)
           find checkoutDir -type f -name "*.R" ! -path "*/renv/*" -exec cp {} "$SCRIPTS_DIR/" \;
           if [ $? -ne 0 ]; then
             echo "Error: Failed to copy .R files." | tee -a "$LOG_FILE"
             exit 1
           fi
+          echo "Copied $FILE_COUNT .R files to $SCRIPTS_DIR." >> "$LOG_FILE"
 
           # 3-4. renv.lockをコピー
           if [ -f "checkoutDir/renv.lock" ]; then
+            echo "Copying renv.lock to $DEST_PATH..." | tee -a "$LOG_FILE"
             cp "checkoutDir/renv.lock" "$DEST_PATH/"
             if [ $? -ne 0 ]; then
               echo "Error: Failed to copy renv.lock." | tee -a "$LOG_FILE"
@@ -214,7 +217,9 @@ jobs:
           echo "End Time: $END_TIME" >> "$LOG_FILE"
           echo "========================================" >> "$LOG_FILE"
           echo "Deployment completed successfully." | tee -a "$LOG_FILE"
+          echo "<details><summary>▼ ここからログの詳細内容</summary>"
           cat "$LOG_FILE"
+          echo "</details>"
 
           # checkoutDirのクリーンアップ
           echo "Cleaning up checkoutDir..."

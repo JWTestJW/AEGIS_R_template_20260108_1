@@ -38,16 +38,36 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check if repository is initialized (has v0.0.0 tag)
+      - name: Check if repository is ready
         id: check_repo_ready
         run: |
           TAGS=$(git tag)
+          # v0.0.0タグが存在しない場合はリポ作成未完了とみなす
           if [ -z "$TAGS" ] || ! echo "$TAGS" | grep -q "^v0\.0\.0$"; then
             echo "repo_ready=false" >> $GITHUB_OUTPUT
             echo "No v0.0.0 tag found (no tags or v0.0.0 missing). Repository not ready. Exiting."
           else
-            echo "repo_ready=true" >> $GITHUB_OUTPUT
-            echo "Repository ready. Continuing."
+            # v0.0.0タグのコミットSHAを取得
+            INIT_COMMIT=$(git rev-list -n 1 v0.0.0)
+            # PushイベントのコミットSHAを取得
+            CURRENT_COMMIT="${GITHUB_SHA}"
+
+            # v0.0.0が現在のコミットの祖先かどうかを確認
+            if git merge-base --is-ancestor "$INIT_COMMIT" "$CURRENT_COMMIT"; then
+              if [ "$INIT_COMMIT" = "$CURRENT_COMMIT" ]; then
+                # 現在のコミットがv0.0.0と同じ場合はリポ作成未完了とみなす
+                echo "repo_ready=false" >> $GITHUB_OUTPUT
+                echo "Current commit is v0.0.0. Repository not ready. Exiting."
+              else
+                # v0.0.0より後のコミットであればリポ作成完了とみなす
+                echo "repo_ready=true" >> $GITHUB_OUTPUT
+                echo "Repository is ready. Continuing."
+              fi
+            else
+              # v0.0.0より前のコミットの場合はリポ作成未完了とみなす
+              echo "repo_ready=false" >> $GITHUB_OUTPUT
+              echo "Current commit is before v0.0.0. Repository not ready. Exiting."
+            fi
           fi
 
   tag-processing:
