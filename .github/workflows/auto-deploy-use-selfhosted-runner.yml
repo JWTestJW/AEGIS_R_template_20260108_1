@@ -182,38 +182,29 @@ jobs:
 
           # 3. .deployignoreから除外リストを読み込む
           DELETE_EXCLUDE_LIST=()
-          in_delete_exclude=false
+          COPY_EXCLUDE_LIST=()
+          current_section=""
           while IFS= read -r line; do
             # コメント行と空行をスキップ
             [[ "$line" =~ ^#.*$ ]] && continue
             [[ -z "$line" ]] && continue
-            # [copy_exclude]セクションに到達したら読み込みを停止
-            [[ "$line" == "[copy_exclude]" ]] && break
-            # [delete_exclude]セクション内であれば行を処理
-            if [[ "$in_delete_exclude" == "true" ]]; then
-              # プレフィックスを削除してリストに追加
+
+            # セクションの切り替えを検出
+            if [[ "$line" == "[delete_exclude]" ]]; then
+              current_section="delete"
+              continue
+            elif [[ "$line" == "[copy_exclude]" ]]; then
+              current_section="copy"
+              continue
+            fi
+
+            # 現在のセクションに応じてリストに追加
+            if [[ "$current_section" == "delete" ]]; then
               item_name=${line#*:}
               DELETE_EXCLUDE_LIST+=("$item_name")
-            fi
-            # [delete_exclude]セクションに到達したら読み込みを開始
-            if [[ "$line" == "[delete_exclude]" ]]; then
-              in_delete_exclude=true
-            fi
-          done < checkoutDir/.github/.deployignore
-
-          COPY_EXCLUDE_LIST=()
-          in_copy_exclude=false
-          while IFS= read -r line; do
-            # コメント行と空行をスキップ
-            [[ "$line" =~ ^#.*$ ]] && continue
-            [[ -z "$line" ]] && continue
-            if [[ "$in_copy_exclude" == "true" ]]; then
-              # プレフィックスを削除してリストに追加
+            elif [[ "$current_section" == "copy" ]]; then
               item_name=${line#*:}
               COPY_EXCLUDE_LIST+=("$item_name")
-            fi
-            if [[ "$line" == "[copy_exclude]" ]]; then
-              in_copy_exclude=true
             fi
           done < checkoutDir/.github/.deployignore
 
