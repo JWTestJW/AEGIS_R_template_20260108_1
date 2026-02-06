@@ -199,7 +199,7 @@ jobs:
             if [[ "$line" == "[delete_exclude]" ]]; then
               in_delete_exclude=true
             fi
-          done < .github/.deployignore
+          done < checkoutDir/.github/.deployignore
 
           COPY_EXCLUDE_LIST=()
           in_copy_exclude=false
@@ -215,7 +215,7 @@ jobs:
             if [[ "$line" == "[copy_exclude]" ]]; then
               in_copy_exclude=true
             fi
-          done < .github/.deployignore
+          done < checkoutDir/.github/.deployignore
 
           echo "Deletion Exclusions: ${DELETE_EXCLUDE_LIST[@]}" | tee -a "$LOG_FILE"
           echo "Copy Exclusions: ${COPY_EXCLUDE_LIST[@]}" | tee -a "$LOG_FILE"
