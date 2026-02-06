@@ -6,17 +6,14 @@
 # 資材を指定パスへデプロイします。
 #
 # 実行条件：
-# ・"Auto Tag Processing"ワークフロー成功時（自動実行）
-# 　- 対象コミットにタグが付与されている場合のみデプロイ
+# ・"Auto Tag Processing"ワークフローからの呼び出し時（自動実行）
 # ・workflow_dispatch（手動実行）
-# 　- 選択したブランチまたはタグの資材をデプロイ
 #
 # 主な処理：
 # ・リポジトリ名からデプロイ先情報を抽出
-# ・テンプレートパスを変数で置換し配信先決定
-# 下記ファイルが配信対象：
-#  renv.lock
-#  .Rファイル（renv配下除く）（Scriptsフォルダへ）
+# ・テンプレートパス（vars）を変数で置換し配信先を決定
+# ・.deployignore の設定に基づき、配信先をクリーンアップ
+# ・.deployignore の設定に基づき、資材を配信先へ同期（rsync）
 # ・エラー時は即時中断、全処理ログはActionsで確認可能
 # ・最後にcheckout資材とログをクリーンアップ
 # ================================================
@@ -183,47 +180,94 @@ jobs:
           echo "Target: $DEST_PATH" >> "$LOG_FILE"
           echo "========================================" >> "$LOG_FILE"
 
-          # 3-2. Scriptsフォルダの存在確認と作成
-          SCRIPTS_DIR="$DEST_PATH/Scripts"
-          if [ -d "$SCRIPTS_DIR" ]; then
-            echo "Removing existing Scripts directory: $SCRIPTS_DIR" | tee -a "$LOG_FILE"
-            rm -rf "$SCRIPTS_DIR"
-          fi
-          mkdir -p "$SCRIPTS_DIR"
+          # 3. .deployignoreから除外リストを読み込む
+          DELETE_EXCLUDE_LIST=()
+          in_delete_exclude=false
+          while IFS= read -r line; do
+            # コメント行と空行をスキップ
+            [[ "$line" =~ ^#.*$ ]] && continue
+            [[ -z "$line" ]] && continue
+            # [copy_exclude]セクションに到達したら読み込みを停止
+            [[ "$line" == "[copy_exclude]" ]] && break
+            # [delete_exclude]セクション内であれば行を処理
+            if [[ "$in_delete_exclude" == "true" ]]; then
+              # プレフィックスを削除してリストに追加
+              item_name=${line#*:}
+              DELETE_EXCLUDE_LIST+=("$item_name")
+            fi
+            # [delete_exclude]セクションに到達したら読み込みを開始
+            if [[ "$line" == "[delete_exclude]" ]]; then
+              in_delete_exclude=true
+            fi
+          done < .github/.deployignore
 
-          # 3-3. checkoutDir配下の全ての.Rファイルを再帰的に検索し、renv配下を除外してScriptsへコピー
-          echo "Copying .R files to Scripts..." | tee -a "$LOG_FILE"
-          FILE_COUNT=$(find checkoutDir -type f -name "*.R" ! -path "*/renv/*" | wc -l)
-          find checkoutDir -type f -name "*.R" ! -path "*/renv/*" -exec cp {} "$SCRIPTS_DIR/" \;
-          if [ $? -ne 0 ]; then
-            echo "Error: Failed to copy .R files." | tee -a "$LOG_FILE"
+          COPY_EXCLUDE_LIST=()
+          in_copy_exclude=false
+          while IFS= read -r line; do
+            # コメント行と空行をスキップ
+            [[ "$line" =~ ^#.*$ ]] && continue
+            [[ -z "$line" ]] && continue
+            if [[ "$in_copy_exclude" == "true" ]]; then
+              # プレフィックスを削除してリストに追加
+              item_name=${line#*:}
+              COPY_EXCLUDE_LIST+=("$item_name")
+            fi
+            if [[ "$line" == "[copy_exclude]" ]]; then
+              in_copy_exclude=true
+            fi
+          done < .github/.deployignore
+
+          echo "Deletion Exclusions: ${DELETE_EXCLUDE_LIST[@]}" | tee -a "$LOG_FILE"
+          echo "Copy Exclusions: ${COPY_EXCLUDE_LIST[@]}" | tee -a "$LOG_FILE"
+
+          # 4. 配信先ディレクトリをクリーンアップする
+          echo "Cleaning destination directory: $DEST_PATH" | tee -a "$LOG_FILE"
+          for item in "$DEST_PATH"/*; do
+            item_name=$(basename "$item")
+            should_exclude=false
+            for exclude_item in "${DELETE_EXCLUDE_LIST[@]}"; do
+              if [[ "$item_name" == "$exclude_item" ]]; then
+                should_exclude=true
+                break
+              fi
+            done
+
+            if [[ "$should_exclude" == "false" ]];
+            then
+              echo "Deleting $item" | tee -a "$LOG_FILE"
+              rm -rf "$item"
+            else
+              echo "Skipping deletion of $item" | tee -a "$LOG_FILE"
+            fi
+          done
+
+          # 5. checkoutDirからDEST_PATHへファイルをコピーする
+          echo "Copying files from checkoutDir to $DEST_PATH" | tee -a "$LOG_FILE"
+          rsync_exclude_opts=()
+          for exclude in "${COPY_EXCLUDE_LIST[@]}"; do
+            rsync_exclude_opts+=(--exclude "$exclude")
+          done
+
+          rsync -av --progress "${rsync_exclude_opts[@]}" checkoutDir/ "$DEST_PATH/" | tee -a "$LOG_FILE"
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            echo "Error: Failed to copy files with rsync." | tee -a "$LOG_FILE"
             exit 1
           fi
-          echo "Copied $FILE_COUNT .R files to $SCRIPTS_DIR." >> "$LOG_FILE"
-
-          # 3-4. renv.lockをコピー
-          if [ -f "checkoutDir/renv.lock" ]; then
-            echo "Copying renv.lock to $DEST_PATH..." | tee -a "$LOG_FILE"
-            cp "checkoutDir/renv.lock" "$DEST_PATH/"
-            if [ $? -ne 0 ]; then
-              echo "Error: Failed to copy renv.lock." | tee -a "$LOG_FILE"
-              exit 1
-            fi
-          else
-            echo "Info: renv.lock not found in checkoutDir." | tee -a "$LOG_FILE"
-          fi
+          echo "Copied files to $DEST_PATH." >> "$LOG_FILE"
 
           END_TIME=$(date +'%Y-%m-%d %H:%M:%S')
           echo "End Time: $END_TIME" >> "$LOG_FILE"
           echo "========================================" >> "$LOG_FILE"
           echo "Deployment completed successfully." | tee -a "$LOG_FILE"
-          echo "<details><summary>▼ ここからログの詳細内容</summary>"
+          echo " "
+          echo "▼▼▼▼▼▼▼▼▼▼ ログの詳細内容 ▼▼▼▼▼▼▼▼▼▼"
           cat "$LOG_FILE"
-          echo "</details>"
+          echo "▲▲▲▲▲▲▲▲▲▲ ログの詳細内容 ▲▲▲▲▲▲▲▲▲▲"
+          echo " "
 
-          # checkoutDirのクリーンアップ
+          # 6. checkoutDirのクリーンアップ
           echo "Cleaning up checkoutDir..."
           rm -rf checkoutDir
 
-          # ログファイルの削除
+          # 7. ログファイルの削除
           rm "$LOG_FILE"

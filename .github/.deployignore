@@ -1,0 +1,12 @@
+# 配信先パスから削除する際の除外リスト
+# フォーマット: type:name (file: または dir:)
+[delete_exclude]
+file:.Rprofile.org
+dir:log
+dir:renv
+
+# リポジトリからコピーする際の除外リスト
+# フォーマット: type:name (file: または dir:)
+[copy_exclude]
+dir:.githooks
+dir:.github
