@@ -12,8 +12,8 @@
 # 主な処理：
 # ・リポジトリ名からデプロイ先情報を抽出
 # ・テンプレートパス（vars）を変数で置換し配信先を決定
-# ・.deployignore の設定に基づき、配信先をクリーンアップ
-# ・.deployignore の設定に基づき、資材を配信先へ同期（rsync）
+# ・.github/.deployconfig.json の設定に基づき、配信先をクリーンアップ
+# ・.github/.deployconfig.json の設定に基づき、資材を配信先へ同期（rsync）
 # ・エラー時は即時中断、全処理ログはActionsで確認可能
 # ・最後にcheckout資材とログをクリーンアップ
 # ================================================
@@ -180,48 +180,56 @@ jobs:
           echo "Target: $DEST_PATH" >> "$LOG_FILE"
           echo "========================================" >> "$LOG_FILE"
 
-          # 3. .deployignoreから除外リストを読み込む
-          DELETE_EXCLUDE_LIST=()
-          COPY_EXCLUDE_LIST=()
-          current_section=""
-          while IFS= read -r line; do
-            # コメント行と空行をスキップ
-            [[ "$line" =~ ^#.*$ ]] && continue
-            [[ -z "$line" ]] && continue
+          # 3. .deployconfig.jsonから除外リストを読み込む
+          CONFIG_FILE="checkoutDir/.github/.deployconfig.json"
 
-            # セクションの切り替えを検出
-            if [[ "$line" == "[delete_exclude]" ]]; then
-              current_section="delete"
-              continue
-            elif [[ "$line" == "[copy_exclude]" ]]; then
-              current_section="copy"
-              continue
-            fi
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "Error: 設定ファイルが見つかりません: $CONFIG_FILE" | tee -a "$LOG_FILE"
+            exit 1
+          fi
 
-            # 現在のセクションに応じてリストに追加
-            if [[ "$current_section" == "delete" ]]; then
-              item_name=${line#*:}
-              DELETE_EXCLUDE_LIST+=("$item_name")
-            elif [[ "$current_section" == "copy" ]]; then
-              item_name=${line#*:}
-              COPY_EXCLUDE_LIST+=("$item_name")
-            fi
-          done < checkoutDir/.github/.deployignore
+          # jqがインストールされているか確認
+          if ! command -v jq &> /dev/null; then
+            echo "Error: jq is not installed. Please install jq on the runner." | tee -a "$LOG_FILE"
+            exit 1
+          fi
 
-          echo "Deletion Exclusions: ${DELETE_EXCLUDE_LIST[@]}" | tee -a "$LOG_FILE"
-          echo "Copy Exclusions: ${COPY_EXCLUDE_LIST[@]}" | tee -a "$LOG_FILE"
+          # exclude_on_deleteリストを読み込む (ファイルとディレクトリを別々に保持)
+          readarray -t DELETE_EXCLUDE_FILES < <(jq -r '.exclude_on_delete.files[]' "$CONFIG_FILE")
+          readarray -t DELETE_EXCLUDE_DIRS < <(jq -r '.exclude_on_delete.dirs[]' "$CONFIG_FILE")
+
+          # exclude_on_copyリストを読み込む (ファイルとディレクトリを別々に保持)
+          readarray -t COPY_EXCLUDE_FILES < <(jq -r '.exclude_on_copy.files[]' "$CONFIG_FILE")
+          readarray -t COPY_EXCLUDE_DIRS < <(jq -r '.exclude_on_copy.dirs[]' "$CONFIG_FILE")
+
+          echo "Deletion Exclusions (Files): ${DELETE_EXCLUDE_FILES[@]}" | tee -a "$LOG_FILE"
+          echo "Deletion Exclusions (Dirs): ${DELETE_EXCLUDE_DIRS[@]}" | tee -a "$LOG_FILE"
+          echo "Copy Exclusions (Files): ${COPY_EXCLUDE_FILES[@]}" | tee -a "$LOG_FILE"
+          echo "Copy Exclusions (Dirs): ${COPY_EXCLUDE_DIRS[@]}" | tee -a "$LOG_FILE"
 
           # 4. 配信先ディレクトリをクリーンアップする
           echo "Cleaning destination directory: $DEST_PATH" | tee -a "$LOG_FILE"
           for item in "$DEST_PATH"/*; do
             item_name=$(basename "$item")
             should_exclude=false
-            for exclude_item in "${DELETE_EXCLUDE_LIST[@]}"; do
-              if [[ "$item_name" == "$exclude_item" ]]; then
-                should_exclude=true
-                break
-              fi
-            done
+
+            # アイテムがディレクトリの場合
+            if [ -d "$item" ]; then
+              for exclude_dir in "${DELETE_EXCLUDE_DIRS[@]}"; do
+                if [[ "$item_name" == "$exclude_dir" ]]; then
+                  should_exclude=true
+                  break
+                fi
+              done
+            # アイテムがファイルの場合
+            elif [ -f "$item" ]; then
+              for exclude_file in "${DELETE_EXCLUDE_FILES[@]}"; do
+                if [[ "$item_name" == "$exclude_file" ]]; then
+                  should_exclude=true
+                  break
+                fi
+              done
+            fi
 
             if [[ "$should_exclude" == "false" ]];
             then
@@ -235,8 +243,12 @@ jobs:
           # 5. checkoutDirからDEST_PATHへファイルをコピーする
           echo "Copying files from checkoutDir to $DEST_PATH" | tee -a "$LOG_FILE"
           rsync_exclude_opts=()
-          for exclude in "${COPY_EXCLUDE_LIST[@]}"; do
+          for exclude in "${COPY_EXCLUDE_FILES[@]}"; do
             rsync_exclude_opts+=(--exclude "$exclude")
+          done
+          for exclude in "${COPY_EXCLUDE_DIRS[@]}"; do
+            # ディレクトリの除外には末尾にスラッシュを追加して、同名のファイルを誤って除外しないようにする
+            rsync_exclude_opts+=(--exclude "$exclude/")
           done
 
           rsync -av --progress "${rsync_exclude_opts[@]}" checkoutDir/ "$DEST_PATH/" | tee -a "$LOG_FILE"
