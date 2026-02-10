@@ -209,8 +209,17 @@ jobs:
 
           # 4. 配信先ディレクトリをクリーンアップする
           echo "Cleaning destination directory: $DEST_PATH" | tee -a "$LOG_FILE"
-          for item in "$DEST_PATH"/*; do
+          # 隠しファイル・ディレクトリ（先頭が.）も含めて全てを対象とする
+          for item in "$DEST_PATH"/.* "$DEST_PATH"/*; do
+            # グロブが展開されなかった場合はスキップ
+            if [ ! -e "$item" ]; then
+              continue
+            fi
             item_name=$(basename "$item")
+            # . と .. はスキップ
+            if [ "$item_name" = "." ] || [ "$item_name" = ".." ]; then
+              continue
+            fi
             should_exclude=false
 
             # アイテムがディレクトリの場合
@@ -251,8 +260,9 @@ jobs:
             rsync_exclude_opts+=(--exclude "$exclude/")
           done
 
-          rsync -av --progress "${rsync_exclude_opts[@]}" checkoutDir/ "$DEST_PATH/" | tee -a "$LOG_FILE"
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+          # rsyncの詳細な進捗はログファイルのみに出力する
+          rsync -av --progress "${rsync_exclude_opts[@]}" checkoutDir/ "$DEST_PATH/" >> "$LOG_FILE" 2>&1
+          if [ $? -ne 0 ]; then
             echo "Error: Failed to copy files with rsync." | tee -a "$LOG_FILE"
             exit 1
           fi
