@@ -242,10 +242,10 @@ jobs:
 
             if [[ "$should_exclude" == "false" ]];
             then
-              echo "Deleting $item" | tee -a "$LOG_FILE"
+              echo "Deleting $item" >> "$LOG_FILE"
               rm -rf "$item"
             else
-              echo "Skipping deletion of $item" | tee -a "$LOG_FILE"
+              echo "Skipping deletion of $item" >> "$LOG_FILE"
             fi
           done
 
