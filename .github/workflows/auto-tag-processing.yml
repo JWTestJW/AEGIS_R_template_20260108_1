@@ -88,23 +88,27 @@ jobs:
         with:
           script: |
             const commitSha = process.env.GITHUB_SHA;
-            // mainブランチにマージされたPRを検索
-            const { data: prs } = await github.rest.pulls.list({
+
+            // このコミットに関連する PR を直接取得
+            const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              state: "closed",
-              base: "main",
-              sort: "updated",
-              direction: "desc",
-              per_page: 10
+              commit_sha: commitSha,
             });
-            // このコミットを含むPRを探す
-            const pr = prs.find(pr => pr.merge_commit_sha === commitSha);
+
+            // main にマージされた PR を1つ選ぶ
+            const pr = prs.find(p =>
+              p.base.ref === 'main' &&
+              p.state === 'closed' &&
+              p.merged_at
+            );
+
             if (!pr) {
-              core.info("No related PR found.");
+              core.info("No related PR found for this commit.");
               core.setOutput("labels", "[]");
               return;
             }
+
             const labels = pr.labels.map(l => l.name);
             core.setOutput("labels", JSON.stringify(labels));
 
