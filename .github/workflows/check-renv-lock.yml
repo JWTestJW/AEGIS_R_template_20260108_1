@@ -65,7 +65,7 @@ jobs:
 
           # 5. Packages セクション内に Source が "Local" のパッケージが
           #    含まれていないか確認（ローカルパッケージは許可しない）
-          LOCAL_PACKAGES=$(jq -r '.Packages // {} | to_entries[] | select(.value.Source == "Local") | .key' renv.lock | paste -sd ", " -)
+          LOCAL_PACKAGES=$(jq -r '[.Packages // {} | to_entries[] | select(.value.Source == "Local") | .key] | join(", ")' renv.lock)
 
           if [ -n "$LOCAL_PACKAGES" ]; then
             echo "::error::'Packages' セクション内に Source が 'Local' のパッケージがあります: $LOCAL_PACKAGES"
