@@ -30,7 +30,7 @@ if ! echo "$LOCK_CONTENT" | grep -q '"R":' || ! echo "$LOCK_CONTENT" | grep -q '
 fi
 
 # 3. URL チェック (Repositories ノード内の URL が指定のドメインで始まっているか)
-ALLOWED_URL_PREFIX="https://aegisrspm"
+ALLOWED_URL_PREFIX="https://aegisrspm."
 
 # awk を使用して Repositories ブロック内の URL のみを抽出・検証
 ERROR_MSG=$(echo "$LOCK_CONTENT" | awk -v prefix="$ALLOWED_URL_PREFIX" '

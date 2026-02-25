@@ -47,7 +47,7 @@ jobs:
 
           # 4. URL のプレフィックスチェック
           #    jq で URL のリストを抽出し、ループでチェック
-          ALLOWED_PREFIX="https://aegisrspm"
+          ALLOWED_PREFIX="https://aegisrspm."
 
           # jq -r で生文字列として取得
           URLS=$(jq -r '.R.Repositories[].URL' renv.lock)
