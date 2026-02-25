@@ -61,9 +61,32 @@ if [ $EXIT_CODE -ne 0 ]; then
   exit 1
 fi
 
-# 4. Packages セクション内に Source が "Local" のパッケージが含まれていないか確認
-if echo "$LOCK_CONTENT" | grep -q '"Source"[[:space:]]*:[[:space:]]*"Local"'; then
-  echo "❌ 'Packages' セクション内に Source が 'Local' のパッケージがあります。"
+# 4. Packages セクション内に Source が "Local" のパッケージが含まれていないか確認 (awk を使用)
+LOCAL_PKG_ERROR=$(echo "$LOCK_CONTENT" | awk '
+BEGIN { in_packages = 0; }
+# "Packages" ブロックの開始を検出
+/"Packages": \{/ { in_packages = 1; next; }
+
+# "Packages" ブロック内でのみ処理
+in_packages {
+  # "Source": "Local" を見つけたらエラーを出力して終了
+  if (/"Source"[[:space:]]*:[[:space:]]*"Local"/) {
+    print "❌ '\''Packages'\'' セクション内に Source が '\''Local'\'' のパッケージがあります。";
+    exit 1; # awk スクリプトをエラーで終了
+  }
+
+  # "Packages" ブロックの終了を検出（簡易判定）
+  # この行が Packages ブロックの最後の } であると仮定
+  if (/^[[:space:]]*\}/) {
+    in_packages = 0;
+  }
+}
+')
+EXIT_CODE=$?
+
+# awk がエラーで終了した場合
+if [ $EXIT_CODE -ne 0 ]; then
+  echo "$LOCAL_PKG_ERROR"
   exit 1
 fi
 
