@@ -63,23 +63,16 @@ fi
 
 # 4. Packages セクション内に Source が "Local" のパッケージが含まれていないか確認 (awk を使用)
 LOCAL_PKG_ERROR=$(echo "$LOCK_CONTENT" | awk '
-BEGIN { in_packages = 0; }
-# "Packages" ブロックの開始を検出
-/"Packages": \{/ { in_packages = 1; next; }
+# "Packages" ブロックの開始を検出したら、フラグを立てる
+/"Packages": \{/ {
+  in_packages = 1;
+  next; # この行のチェックは不要なので次に進む
+}
 
-# "Packages" ブロック内でのみ処理
-in_packages {
-  # "Source": "Local" を見つけたらエラーを出力して終了
-  if (/"Source"[[:space:]]*:[[:space:]]*"Local"/) {
-    print "❌ '\''Packages'\'' セクション内に Source が '\''Local'\'' のパッケージがあります。";
-    exit 1; # awk スクリプトをエラーで終了
-  }
-
-  # "Packages" ブロックの終了を検出（簡易判定）
-  # この行が Packages ブロックの最後の } であると仮定
-  if (/^[[:space:]]*\}/) {
-    in_packages = 0;
-  }
+# フラグが立っている場合、"Source": "Local" を探す
+in_packages && /"Source"[[:space:]]*:[[:space:]]*"Local"/ {
+  print "❌ '\''Packages'\'' セクション内に Source が '\''Local'\'' のパッケージがあります。";
+  exit 1; # 見つけたら即座にエラーで終了
 }
 ')
 EXIT_CODE=$?
